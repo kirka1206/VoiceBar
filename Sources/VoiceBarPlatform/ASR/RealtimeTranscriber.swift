@@ -12,6 +12,7 @@ final class RealtimeTranscriber: @unchecked Sendable {
     private let inferenceQueue = DispatchQueue(label: "com.kir.voicebar.whisper", qos: .userInitiated)
     private let engine: WhisperRuntime
     private let language: TranscriptionLanguage
+    private let initialPrompt: String?
     private var normalizers: [AudioSource: StreamingResampler] = [:]
     private var chunkers: [AudioSource: AudioChunker] = [:]
     private var sessionOrigin: TimeInterval?
@@ -24,12 +25,14 @@ final class RealtimeTranscriber: @unchecked Sendable {
     init(
         engine: WhisperRuntime,
         language: TranscriptionLanguage,
+        recognitionVocabulary: String,
         sources: [AudioSource],
         onUpdate: @escaping @Sendable ([TranscriptChunk]) -> Void,
         onError: @escaping @Sendable (String) -> Void
     ) {
         self.engine = engine
         self.language = language
+        self.initialPrompt = RecognitionVocabulary.initialPrompt(from: recognitionVocabulary)
         self.onUpdate = onUpdate
         self.onError = onError
         for source in sources {
@@ -87,7 +90,11 @@ final class RealtimeTranscriber: @unchecked Sendable {
         inferenceQueue.async { [weak self] in
             guard let self else { return }
             do {
-                let text = try self.engine.transcribe(samples: chunk.samples, language: self.language)
+                let text = try self.engine.transcribe(
+                    samples: chunk.samples,
+                    language: self.language,
+                    initialPrompt: self.initialPrompt
+                )
                 guard !text.isEmpty else { return }
                 if self.assembler.append(source: chunk.source, startTime: chunk.startTime, text: text) != nil {
                     let snapshot = self.assembler.chunks

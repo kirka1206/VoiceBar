@@ -29,7 +29,8 @@ final class WhisperRuntime: @unchecked Sendable {
     private typealias DestroyFunction = @convention(c) (UnsafeMutableRawPointer?) -> Void
     private typealias TranscribeFunction = @convention(c) (
         UnsafeMutableRawPointer?, UnsafePointer<Float>?, Int32, UnsafePointer<CChar>?,
-        UnsafeMutablePointer<CChar>?, Int32, UnsafeMutablePointer<CChar>?, Int32
+        UnsafePointer<CChar>?, UnsafeMutablePointer<CChar>?, Int32,
+        UnsafeMutablePointer<CChar>?, Int32
     ) -> Int32
 
     private let libraryHandle: UnsafeMutableRawPointer
@@ -74,27 +75,35 @@ final class WhisperRuntime: @unchecked Sendable {
         dlclose(libraryHandle)
     }
 
-    func transcribe(samples: [Float], language: TranscriptionLanguage) throws -> String {
+    func transcribe(
+        samples: [Float],
+        language: TranscriptionLanguage,
+        initialPrompt: String?
+    ) throws -> String {
         guard !samples.isEmpty, samples.count <= Int(Int32.max) else {
             throw WhisperRuntimeError.transcription("Сегмент аудио пустой или слишком большой.")
         }
 
         var textBuffer = [CChar](repeating: 0, count: 65_536)
         var errorBuffer = [CChar](repeating: 0, count: 2_048)
+        let prompt = initialPrompt ?? ""
         let result = samples.withUnsafeBufferPointer { sampleBuffer in
             language.rawValue.withCString { languageCode in
-                textBuffer.withUnsafeMutableBufferPointer { text in
-                    errorBuffer.withUnsafeMutableBufferPointer { error in
-                        transcribeFunction(
-                            context,
-                            sampleBuffer.baseAddress,
-                            Int32(sampleBuffer.count),
-                            languageCode,
-                            text.baseAddress,
-                            Int32(text.count),
-                            error.baseAddress,
-                            Int32(error.count)
-                        )
+                prompt.withCString { promptPointer in
+                    textBuffer.withUnsafeMutableBufferPointer { text in
+                        errorBuffer.withUnsafeMutableBufferPointer { error in
+                            transcribeFunction(
+                                context,
+                                sampleBuffer.baseAddress,
+                                Int32(sampleBuffer.count),
+                                languageCode,
+                                promptPointer,
+                                text.baseAddress,
+                                Int32(text.count),
+                                error.baseAddress,
+                                Int32(error.count)
+                            )
+                        }
                     }
                 }
             }

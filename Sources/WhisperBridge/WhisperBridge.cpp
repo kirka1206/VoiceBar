@@ -62,6 +62,7 @@ int32_t voicebar_whisper_transcribe(void *opaque_context,
                                     const float *samples,
                                     int32_t sample_count,
                                     const char *language,
+                                    const char *initial_prompt,
                                     char *text_buffer,
                                     int32_t text_capacity,
                                     char *error_buffer,
@@ -83,6 +84,10 @@ int32_t voicebar_whisper_transcribe(void *opaque_context,
     parameters.language = (language == nullptr || language[0] == '\0')
                               ? "auto"
                               : language;
+    parameters.initial_prompt = (initial_prompt == nullptr || initial_prompt[0] == '\0')
+                                    ? nullptr
+                                    : initial_prompt;
+    parameters.carry_initial_prompt = parameters.initial_prompt != nullptr;
 
     if (whisper_full(wrapper->context, parameters, samples,
                      static_cast<std::size_t>(sample_count)) != 0) {
