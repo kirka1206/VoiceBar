@@ -4,12 +4,12 @@ import Testing
 import VoiceBarCore
 
 @Test
-func realtimeTranscriberNormalizesEachSegmentBeforeRemovingOverlap() async {
+func realtimeTranscriberNormalizesEachSegmentBeforeRemovingOverlap() async throws {
     let engine = StubSpeechRecognitionEngine(responses: [
         "Настроили кластер на кубернетис",
         "на Kubernetes и проверили API"
     ])
-    let transcriber = RealtimeTranscriber(
+    let transcriber = try RealtimeTranscriber(
         engine: engine,
         language: .russian,
         recognitionVocabulary: "",
@@ -36,11 +36,23 @@ func realtimeTranscriberNormalizesEachSegmentBeforeRemovingOverlap() async {
 private final class StubSpeechRecognitionEngine: SpeechRecognitionEngine, @unchecked Sendable {
     private let lock = NSLock()
     private let responses: [String]
+    let initialPromptTokenBudget: Int
+    private let tokenCount: Int
     private var responseIndex = 0
 
-    init(responses: [String]) {
+    init(responses: [String], initialPromptTokenBudget: Int = 223, tokenCount: Int = 0) {
         self.responses = responses
+        self.initialPromptTokenBudget = initialPromptTokenBudget
+        self.tokenCount = tokenCount
     }
+
+    var transcriptionCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return responseIndex
+    }
+
+    func initialPromptTokenCount(for prompt: String) throws -> Int { tokenCount }
 
     func transcribe(samples: [Float], language: TranscriptionLanguage, initialPrompt: String?) throws -> String {
         lock.lock()

@@ -7,6 +7,17 @@ struct TranscriptionResult: Sendable {
     let firstFailureMessage: String?
 }
 
+enum RealtimeTranscriberError: LocalizedError, Equatable {
+    case vocabularyPromptOverBudget(tokenCount: Int, tokenBudget: Int)
+
+    var errorDescription: String? {
+        switch self {
+        case .vocabularyPromptOverBudget(let tokenCount, let tokenBudget):
+            "Словарь занимает \(tokenCount) токенов при лимите \(tokenBudget). Удалите часть терминов в настройках, чтобы начать распознавание."
+        }
+    }
+}
+
 final class RealtimeTranscriber: @unchecked Sendable {
     private let inputQueue = DispatchQueue(label: "com.kir.voicebar.audio-input", qos: .userInitiated)
     private let inferenceQueue = DispatchQueue(label: "com.kir.voicebar.whisper", qos: .userInitiated)
@@ -31,10 +42,24 @@ final class RealtimeTranscriber: @unchecked Sendable {
         sources: [AudioSource],
         onUpdate: @escaping @Sendable ([TranscriptChunk]) -> Void,
         onError: @escaping @Sendable (String) -> Void
-    ) {
+    ) throws {
         self.engine = engine
         self.language = language
-        self.initialPrompt = RecognitionVocabulary.initialPrompt(from: recognitionVocabulary)
+        let prompt = RecognitionVocabulary.initialPrompt(from: recognitionVocabulary)
+        if let prompt {
+            let tokenCount = try engine.initialPromptTokenCount(for: prompt)
+            let usage = RecognitionVocabulary.PromptUsage(
+                tokenCount: tokenCount,
+                tokenBudget: engine.initialPromptTokenBudget
+            )
+            guard usage.isWithinBudget else {
+                throw RealtimeTranscriberError.vocabularyPromptOverBudget(
+                    tokenCount: usage.tokenCount,
+                    tokenBudget: usage.tokenBudget
+                )
+            }
+        }
+        self.initialPrompt = prompt
         self.correctionRules = RecognitionNormalizer.rules(from: correctionRules)
         self.onUpdate = onUpdate
         self.onError = onError

@@ -21,6 +21,12 @@ struct SettingsView: View {
     @State private var isCapturingHotKey = false
     @State private var showingVocabularyImporter = false
     @State private var vocabularyImportMessage: String?
+    @State private var showingDocumentImporter = false
+    @State private var showingCandidateReview = false
+    @State private var isExtractingDocumentTerms = false
+    @State private var documentTermCandidates: [DocumentTermCandidate] = []
+    @State private var documentImportSummary = ""
+    @State private var documentImportMessage: String?
     @State private var showingCorrectionImporter = false
     @State private var correctionImportMessage: String?
     @State private var hasPostEventAccess = CGPreflightPostEventAccess()
@@ -59,8 +65,28 @@ struct SettingsView: View {
         ) { result in
             importCorrectionRules(result)
         }
+        .fileImporter(
+            isPresented: $showingDocumentImporter,
+            allowedContentTypes: DocumentTextExtractor.allowedContentTypes,
+            allowsMultipleSelection: true
+        ) { result in
+            importDocuments(result)
+        }
+        .sheet(isPresented: $showingCandidateReview) {
+            DocumentTermReviewView(
+                candidates: documentTermCandidates,
+                importSummary: documentImportSummary,
+                onAdd: addDocumentTerms
+            )
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             hasPostEventAccess = CGPreflightPostEventAccess()
+        }
+        .onChange(of: recognitionVocabulary, initial: true) { _, vocabulary in
+            controller.requestPromptUsage(for: vocabulary)
+        }
+        .onChange(of: controller.isEngineReady) { _, isReady in
+            if isReady { controller.requestPromptUsage(for: recognitionVocabulary) }
         }
     }
 
@@ -198,10 +224,44 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+
+                if let promptUsage = controller.promptUsage(for: recognitionVocabulary) {
+                    Label(
+                        "Подсказка: \(promptUsage.tokenCount) из \(promptUsage.tokenBudget) токенов",
+                        systemImage: promptUsage.isWithinBudget ? "checkmark.circle" : "exclamationmark.triangle.fill"
+                    )
+                    .font(.callout)
+                    .foregroundColor(promptUsage.isWithinBudget ? .secondary : .red)
+                    if !promptUsage.isWithinBudget {
+                        Text("Сохранённый словарь останется без изменений, но запись заблокирована, пока подсказка превышает лимит. Удалите часть терминов из списка.")
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                } else {
+                    Text("Размер подсказки станет доступен после загрузки модели Whisper.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Section("Добавить термины из документов") {
+                Text("VoiceBar ищет технические названия в текстовых документах, Word и PDF с текстовым слоем. Сканированные PDF не распознаются. Файлы обрабатываются на этом Mac и не сохраняются в истории. Если файл хранится в iCloud Drive или другом File Provider, macOS при необходимости загрузит его для чтения.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Button(isExtractingDocumentTerms ? "Извлечение…" : "Выбрать документы…") {
+                    showingDocumentImporter = true
+                }
+                .disabled(isExtractingDocumentTerms)
+                if let documentImportMessage {
+                    Text(documentImportMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
             }
 
             Section {
-                Text("Список передаётся Whisper как контекстная подсказка для каждого фрагмента записи. Это помогает сохранить написание терминов, но не гарантирует распознавание и иногда может склонять модель к словам из списка. Подсказка ограничена контекстным окном Whisper, поэтому при большом списке часть терминов может учитываться слабее.")
+                Text("Список передаётся Whisper как контекстная подсказка для каждого фрагмента записи. Это помогает сохранить написание терминов, но не гарантирует распознавание и иногда может склонять модель к словам из списка. VoiceBar показывает заполнение лимита выбранной модели и не начнёт запись, если полный список его превышает.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -273,13 +333,83 @@ struct SettingsView: View {
 
                 let merged = RecognitionVocabulary.merge(existing: recognitionVocabulary, imported: imported)
                 recognitionVocabulary = merged.text
-                vocabularyImportMessage = "Новых терминов добавлено: \(merged.addedCount)."
+                vocabularyImportMessage = vocabularyImportStatus(addedCount: merged.addedCount, vocabulary: merged.text)
             } catch {
                 vocabularyImportMessage = "Не удалось прочитать файл: \(error.localizedDescription)"
             }
         case .failure(let error):
             vocabularyImportMessage = "Не удалось загрузить файл: \(error.localizedDescription)"
         }
+    }
+
+    private func importDocuments(_ result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            guard !urls.isEmpty else { return }
+            let currentVocabulary = recognitionVocabulary
+            isExtractingDocumentTerms = true
+            documentImportMessage = "Читаем выбранные документы локально…"
+            Task.detached(priority: .userInitiated) {
+                var accumulator = DocumentTermCandidateExtractor.Accumulator(
+                    excluding: RecognitionVocabulary.terms(from: currentVocabulary)
+                )
+                var processedFileCount = 0
+                var failures: [String] = []
+
+                for url in urls {
+                    let didStartAccessing = url.startAccessingSecurityScopedResource()
+                    defer {
+                        if didStartAccessing { url.stopAccessingSecurityScopedResource() }
+                    }
+                    do {
+                        try DocumentTextExtractor.forEachFragment(from: url) { fragment in
+                            accumulator.add(fragment)
+                        }
+                        processedFileCount += 1
+                    } catch {
+                        failures.append("\(url.lastPathComponent): \(error.localizedDescription)")
+                    }
+                }
+
+                let candidates = accumulator.candidates(limit: 100)
+                let summaryParts = ["Обработано файлов: \(processedFileCount) из \(urls.count)."]
+                    + (failures.isEmpty ? [] : ["Не удалось обработать:\n" + failures.joined(separator: "\n")])
+                let summary = summaryParts.joined(separator: " ")
+                let hasFailures = !failures.isEmpty
+
+                await MainActor.run {
+                    isExtractingDocumentTerms = false
+                    documentTermCandidates = candidates
+                    documentImportSummary = summary
+                    if candidates.isEmpty {
+                        documentImportMessage = !hasFailures
+                            ? "Подходящих новых терминов не найдено."
+                            : summary + "\nНовых терминов для проверки нет."
+                    } else {
+                        documentImportMessage = summary + " Проверьте предложения перед добавлением."
+                        showingCandidateReview = true
+                    }
+                }
+            }
+        case .failure(let error):
+            documentImportMessage = "Не удалось открыть выбор файлов: \(error.localizedDescription)"
+        }
+    }
+
+    private func addDocumentTerms(_ terms: [String]) {
+        guard !terms.isEmpty else { return }
+        let merged = RecognitionVocabulary.merge(existing: recognitionVocabulary, imported: terms.joined(separator: "\n"))
+        recognitionVocabulary = merged.text
+        vocabularyImportMessage = vocabularyImportStatus(addedCount: merged.addedCount, vocabulary: merged.text)
+        documentImportMessage = "Добавлено терминов: \(merged.addedCount). \(documentImportSummary)"
+    }
+
+    private func vocabularyImportStatus(addedCount: Int, vocabulary: String) -> String {
+        var message = "Новых терминов добавлено: \(addedCount)."
+        if let promptUsage = controller.promptUsage(for: vocabulary), !promptUsage.isWithinBudget {
+            message += " Подсказка превышает лимит: \(promptUsage.tokenCount)/\(promptUsage.tokenBudget) токенов. Все строки сохранены; сократите словарь перед записью."
+        }
+        return message
     }
 
     private func importCorrectionRules(_ result: Result<URL, Error>) {

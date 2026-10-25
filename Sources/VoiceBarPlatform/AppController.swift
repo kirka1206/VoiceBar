@@ -19,6 +19,7 @@ public final class AppController: ObservableObject {
     @Published public private(set) var previewChunks: [TranscriptChunk] = []
     @Published public private(set) var recordingDuration: TimeInterval = 0
     @Published public private(set) var activeSourceSelection: SourceSelection = .microphone
+    @Published private var promptUsageCache: [String: RecognitionVocabulary.PromptUsage] = [:]
     public var previewText: String {
         TranscriptAssembler.render(previewChunks, withSourceLabels: activeSourceSelection == .both)
     }
@@ -41,6 +42,9 @@ public final class AppController: ObservableObject {
     private var holdHotKeyShouldContinue = false
     private var holdHotKeyStartPending = false
     private var holdHotKeyOwnsRecording = false
+    private var latestRequestedVocabulary = ""
+    private var pendingPromptUsageVocabulary: String?
+    private var promptUsageTask: Task<Void, Never>?
 
     public init(modelContext: ModelContext) {
         self.modelContext = modelContext
@@ -85,6 +89,48 @@ public final class AppController: ObservableObject {
 
     public func clearNotice() {
         notice = nil
+    }
+
+    public func promptUsage(for vocabulary: String) -> RecognitionVocabulary.PromptUsage? {
+        promptUsageCache[vocabulary]
+    }
+
+    public func requestPromptUsage(for vocabulary: String) {
+        latestRequestedVocabulary = vocabulary
+        guard let engine else { return }
+
+        if promptUsageCache[vocabulary] != nil {
+            promptUsageTask?.cancel()
+            promptUsageTask = nil
+            pendingPromptUsageVocabulary = nil
+            return
+        }
+        guard pendingPromptUsageVocabulary != vocabulary else { return }
+
+        promptUsageTask?.cancel()
+        pendingPromptUsageVocabulary = vocabulary
+        let prompt = RecognitionVocabulary.initialPrompt(from: vocabulary) ?? ""
+        promptUsageTask = Task { [weak self, engine] in
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled else { return }
+
+            let usage = await Task.detached(priority: .utility) { () -> RecognitionVocabulary.PromptUsage? in
+                do {
+                    let tokenCount = try engine.initialPromptTokenCount(for: prompt)
+                    return RecognitionVocabulary.PromptUsage(
+                        tokenCount: tokenCount,
+                        tokenBudget: engine.initialPromptTokenBudget
+                    )
+                } catch {
+                    return nil
+                }
+            }.value
+
+            guard !Task.isCancelled, let self else { return }
+            if let usage { self.promptUsageCache[vocabulary] = usage }
+            self.pendingPromptUsageVocabulary = nil
+            self.promptUsageTask = nil
+        }
     }
 
     public func copyToClipboard(_ text: String) {
@@ -136,6 +182,8 @@ public final class AppController: ObservableObject {
             modelProgress = nil
             statusMessage = "Готово к диктовке"
             notice = nil
+            promptUsageCache.removeAll()
+            requestPromptUsage(for: latestRequestedVocabulary)
         } catch {
             modelProgress = nil
             statusMessage = "Распознаватель не готов"
@@ -168,19 +216,31 @@ public final class AppController: ObservableObject {
         let correctionRules = UserDefaults.standard.string(forKey: "recognitionCorrectionRules") ?? ""
         recordingHistoryGeneration = historyGeneration
 
-        let transcriber = RealtimeTranscriber(
-            engine: engine,
-            language: activeLanguage,
-            recognitionVocabulary: recognitionVocabulary,
-            correctionRules: correctionRules,
-            sources: activeSourceSelection.sources,
-            onUpdate: { [weak self] chunks in
-                Task { @MainActor in self?.previewChunks = chunks }
-            },
-            onError: { [weak self] message in
-                Task { @MainActor in self?.notice = "Ошибка распознавания: \(message)" }
-            }
-        )
+        let transcriber: RealtimeTranscriber
+        do {
+            transcriber = try RealtimeTranscriber(
+                engine: engine,
+                language: activeLanguage,
+                recognitionVocabulary: recognitionVocabulary,
+                correctionRules: correctionRules,
+                sources: activeSourceSelection.sources,
+                onUpdate: { [weak self] chunks in
+                    Task { @MainActor in self?.previewChunks = chunks }
+                },
+                onError: { [weak self] message in
+                    Task { @MainActor in self?.notice = "Ошибка распознавания: \(message)" }
+                }
+            )
+        } catch {
+            isStarting = false
+            recordingTargetProcessID = nil
+            recordingHistoryGeneration = nil
+            holdHotKeyStartPending = false
+            holdHotKeyShouldContinue = false
+            statusMessage = "Словарь превышает лимит подсказки"
+            notice = error.localizedDescription
+            return
+        }
         self.transcriber = transcriber
 
         do {

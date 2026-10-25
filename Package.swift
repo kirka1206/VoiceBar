@@ -13,6 +13,10 @@ let package = Package(
             path: "Sources/VoiceBarCore"
         ),
         .target(
+            name: "TranscriptCorrectionEvaluationSupport",
+            path: "Experiments/TranscriptCorrection/Support"
+        ),
+        .target(
             name: "VoiceBarPlatform",
             dependencies: ["VoiceBarCore"],
             path: "Sources/VoiceBarPlatform",
@@ -23,7 +27,9 @@ let package = Package(
                 .linkedFramework("CoreAudio"),
                 .linkedFramework("CoreGraphics"),
                 .linkedFramework("Carbon"),
-                .linkedFramework("SwiftData")
+                .linkedFramework("SwiftData"),
+                .linkedFramework("PDFKit"),
+                .linkedFramework("NaturalLanguage")
             ]
         ),
         .executableTarget(
@@ -31,9 +37,16 @@ let package = Package(
             dependencies: ["VoiceBarCore", "VoiceBarPlatform"],
             path: "Sources/VoiceBar"
         ),
+        .executableTarget(
+            name: "TranscriptCorrectionEvaluation",
+            dependencies: ["VoiceBarCore", "TranscriptCorrectionEvaluationSupport"],
+            path: "scripts",
+            exclude: ["build-app.sh", "check-core.sh", "check-core.swift"],
+            sources: ["evaluate-transcript-correction.swift"]
+        ),
         .testTarget(
             name: "VoiceBarCoreTests",
-            dependencies: ["VoiceBarCore"],
+            dependencies: ["VoiceBarCore", "TranscriptCorrectionEvaluationSupport"],
             path: "Tests/VoiceBarCoreTests"
         ),
         .testTarget(

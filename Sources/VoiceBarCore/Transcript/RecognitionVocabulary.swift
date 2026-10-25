@@ -1,6 +1,19 @@
 import Foundation
 
 public enum RecognitionVocabulary {
+    public struct PromptUsage: Equatable, Sendable {
+        public let tokenCount: Int
+        public let tokenBudget: Int
+
+        public var isWithinBudget: Bool { tokenCount <= tokenBudget }
+        public var remainingTokens: Int { max(0, tokenBudget - tokenCount) }
+
+        public init(tokenCount: Int, tokenBudget: Int) {
+            self.tokenCount = tokenCount
+            self.tokenBudget = tokenBudget
+        }
+    }
+
     public static func terms(from text: String) -> [String] {
         var seen = Set<String>()
         return text
@@ -26,4 +39,5 @@ public enum RecognitionVocabulary {
             + vocabularyTerms.joined(separator: ", ")
             + ". Сохраняй их написание, если они произнесены."
     }
+
 }

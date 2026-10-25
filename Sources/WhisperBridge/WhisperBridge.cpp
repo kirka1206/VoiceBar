@@ -120,4 +120,27 @@ int32_t voicebar_whisper_transcribe(void *opaque_context,
     return 0;
 }
 
+int32_t voicebar_whisper_initial_prompt_budget(void *opaque_context) {
+    auto *wrapper = static_cast<VoiceBarWhisperContext *>(opaque_context);
+    if (wrapper == nullptr || wrapper->context == nullptr) {
+        return 0;
+    }
+
+    const auto parameters = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+    const int32_t maximum_prompt_context = std::min(
+        parameters.n_max_text_ctx,
+        whisper_n_text_ctx(wrapper->context) / 2);
+    return std::max(1, maximum_prompt_context - 1);
+}
+
+int32_t voicebar_whisper_prompt_token_count(void *opaque_context,
+                                            const char *prompt) {
+    auto *wrapper = static_cast<VoiceBarWhisperContext *>(opaque_context);
+    if (wrapper == nullptr || wrapper->context == nullptr || prompt == nullptr || prompt[0] == '\0') {
+        return 0;
+    }
+
+    return whisper_token_count(wrapper->context, prompt);
+}
+
 }
