@@ -20,9 +20,17 @@ enum WhisperRuntimeError: LocalizedError {
     }
 }
 
+protocol SpeechRecognitionEngine: Sendable {
+    func transcribe(
+        samples: [Float],
+        language: TranscriptionLanguage,
+        initialPrompt: String?
+    ) throws -> String
+}
+
 /// Holds one whisper.cpp context for the whole app session; chunk transcriptions
 /// reuse the loaded model instead of reopening its multi-gigabyte weights.
-final class WhisperRuntime: @unchecked Sendable {
+final class WhisperRuntime: SpeechRecognitionEngine, @unchecked Sendable {
     private typealias CreateFunction = @convention(c) (
         UnsafePointer<CChar>, UnsafeMutablePointer<CChar>?, Int32
     ) -> UnsafeMutableRawPointer?

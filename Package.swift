@@ -35,6 +35,11 @@ let package = Package(
             name: "VoiceBarCoreTests",
             dependencies: ["VoiceBarCore"],
             path: "Tests/VoiceBarCoreTests"
+        ),
+        .testTarget(
+            name: "VoiceBarPlatformTests",
+            dependencies: ["VoiceBarCore", "VoiceBarPlatform"],
+            path: "Tests/VoiceBarPlatformTests"
         )
     ],
     swiftLanguageVersions: [.v5]

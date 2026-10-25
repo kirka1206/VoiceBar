@@ -165,12 +165,14 @@ public final class AppController: ObservableObject {
         activeSourceSelection = SourceSelection(rawValue: UserDefaults.standard.string(forKey: "sourceSelection") ?? "") ?? .microphone
         activeLanguage = TranscriptionLanguage(rawValue: UserDefaults.standard.string(forKey: "transcriptionLanguage") ?? "") ?? .russian
         let recognitionVocabulary = UserDefaults.standard.string(forKey: "recognitionVocabulary") ?? ""
+        let correctionRules = UserDefaults.standard.string(forKey: "recognitionCorrectionRules") ?? ""
         recordingHistoryGeneration = historyGeneration
 
         let transcriber = RealtimeTranscriber(
             engine: engine,
             language: activeLanguage,
             recognitionVocabulary: recognitionVocabulary,
+            correctionRules: correctionRules,
             sources: activeSourceSelection.sources,
             onUpdate: { [weak self] chunks in
                 Task { @MainActor in self?.previewChunks = chunks }

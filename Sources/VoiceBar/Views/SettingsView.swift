@@ -16,10 +16,13 @@ struct SettingsView: View {
     @AppStorage("dictationHotKeyModifiers") private var hotKeyModifiers = Int(controlKey | optionKey)
     @AppStorage("dictationHotKeyName") private var hotKeyName = "Пробел"
     @AppStorage("recognitionVocabulary") private var recognitionVocabulary = ""
+    @AppStorage("recognitionCorrectionRules") private var recognitionCorrectionRules = ""
     @State private var showingClearConfirmation = false
     @State private var isCapturingHotKey = false
     @State private var showingVocabularyImporter = false
     @State private var vocabularyImportMessage: String?
+    @State private var showingCorrectionImporter = false
+    @State private var correctionImportMessage: String?
     @State private var hasPostEventAccess = CGPreflightPostEventAccess()
 
     var body: some View {
@@ -29,6 +32,9 @@ struct SettingsView: View {
 
             vocabularySettings
                 .tabItem { Label("Словарь", systemImage: "text.book.closed") }
+
+            correctionSettings
+                .tabItem { Label("Исправления", systemImage: "arrow.2.circlepath") }
         }
         .padding(18)
         .confirmationDialog(
@@ -46,6 +52,12 @@ struct SettingsView: View {
             allowedContentTypes: [.plainText]
         ) { result in
             importVocabulary(result)
+        }
+        .fileImporter(
+            isPresented: $showingCorrectionImporter,
+            allowedContentTypes: [.plainText]
+        ) { result in
+            importCorrectionRules(result)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             hasPostEventAccess = CGPreflightPostEventAccess()
@@ -197,6 +209,50 @@ struct SettingsView: View {
         .formStyle(.grouped)
     }
 
+    private var correctionSettings: some View {
+        Form {
+            Section("Варианты распознавания → правильное написание") {
+                Text("Указывайте по одному правилу на строку в формате «как распознаётся => как писать». Например: Vesphere => vSphere. Правила применяются к целым словам и фразам; более длинная фраза имеет приоритет.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+
+                TextEditor(text: $recognitionCorrectionRules)
+                    .font(.system(.body, design: .monospaced))
+                    .frame(minHeight: 190)
+                    .accessibilityLabel("Правила исправления распознавания")
+
+                HStack {
+                    Text("Правил: \(RecognitionNormalizer.rules(from: recognitionCorrectionRules).count)")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Загрузить из файла…") {
+                        showingCorrectionImporter = true
+                    }
+                }
+
+                let ambiguousAliases = RecognitionNormalizer.ambiguousAliases(in: recognitionCorrectionRules)
+                if !ambiguousAliases.isEmpty {
+                    Text("Неоднозначные русские слова не исправляются автоматически: \(ambiguousAliases.joined(separator: ", ")). Их написание зависит от контекста.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                if let correctionImportMessage {
+                    Text(correctionImportMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Section {
+                Text("Исправления применяются к каждому сегменту до сборки расшифровки, поэтому предварительный просмотр и итоговый текст используют одинаковое написание. Обычные русские слова, которые могут встречаться в других значениях, оставляются без автоматической замены.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+    }
+
     private func importVocabulary(_ result: Result<URL, Error>) {
         switch result {
         case .success(let url):
@@ -223,6 +279,40 @@ struct SettingsView: View {
             }
         case .failure(let error):
             vocabularyImportMessage = "Не удалось загрузить файл: \(error.localizedDescription)"
+        }
+    }
+
+    private func importCorrectionRules(_ result: Result<URL, Error>) {
+        switch result {
+        case .success(let url):
+            let didStartAccessing = url.startAccessingSecurityScopedResource()
+            defer {
+                if didStartAccessing {
+                    url.stopAccessingSecurityScopedResource()
+                }
+            }
+
+            do {
+                let imported = try String(contentsOf: url, encoding: .utf8)
+                let merged = RecognitionNormalizer.merge(existing: recognitionCorrectionRules, imported: imported)
+                recognitionCorrectionRules = merged.text
+
+                var messages: [String] = []
+                if merged.addedCount > 0 {
+                    messages.append("Добавлено правил: \(merged.addedCount).")
+                }
+                if !merged.conflicts.isEmpty {
+                    messages.append("Конфликтующие строки: \(merged.conflicts.joined(separator: "; ")). Существующие правила сохранены; измените их в редакторе, если нужен другой вариант.")
+                }
+                if messages.isEmpty {
+                    messages.append("Новых правил нет: строки пусты, некорректны или уже добавлены.")
+                }
+                correctionImportMessage = messages.joined(separator: " ")
+            } catch {
+                correctionImportMessage = "Не удалось прочитать файл: \(error.localizedDescription)"
+            }
+        case .failure(let error):
+            correctionImportMessage = "Не удалось загрузить файл: \(error.localizedDescription)"
         }
     }
 

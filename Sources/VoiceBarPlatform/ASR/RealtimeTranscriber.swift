@@ -10,9 +10,10 @@ struct TranscriptionResult: Sendable {
 final class RealtimeTranscriber: @unchecked Sendable {
     private let inputQueue = DispatchQueue(label: "com.kir.voicebar.audio-input", qos: .userInitiated)
     private let inferenceQueue = DispatchQueue(label: "com.kir.voicebar.whisper", qos: .userInitiated)
-    private let engine: WhisperRuntime
+    private let engine: any SpeechRecognitionEngine
     private let language: TranscriptionLanguage
     private let initialPrompt: String?
+    private let correctionRules: [RecognitionNormalizer.Rule]
     private var normalizers: [AudioSource: StreamingResampler] = [:]
     private var chunkers: [AudioSource: AudioChunker] = [:]
     private var sessionOrigin: TimeInterval?
@@ -23,9 +24,10 @@ final class RealtimeTranscriber: @unchecked Sendable {
     private let onError: @Sendable (String) -> Void
 
     init(
-        engine: WhisperRuntime,
+        engine: any SpeechRecognitionEngine,
         language: TranscriptionLanguage,
         recognitionVocabulary: String,
+        correctionRules: String = "",
         sources: [AudioSource],
         onUpdate: @escaping @Sendable ([TranscriptChunk]) -> Void,
         onError: @escaping @Sendable (String) -> Void
@@ -33,6 +35,7 @@ final class RealtimeTranscriber: @unchecked Sendable {
         self.engine = engine
         self.language = language
         self.initialPrompt = RecognitionVocabulary.initialPrompt(from: recognitionVocabulary)
+        self.correctionRules = RecognitionNormalizer.rules(from: correctionRules)
         self.onUpdate = onUpdate
         self.onError = onError
         for source in sources {
@@ -90,11 +93,12 @@ final class RealtimeTranscriber: @unchecked Sendable {
         inferenceQueue.async { [weak self] in
             guard let self else { return }
             do {
-                let text = try self.engine.transcribe(
+                let recognizedText = try self.engine.transcribe(
                     samples: chunk.samples,
                     language: self.language,
                     initialPrompt: self.initialPrompt
                 )
+                let text = RecognitionNormalizer.normalize(recognizedText, using: self.correctionRules)
                 guard !text.isEmpty else { return }
                 if self.assembler.append(source: chunk.source, startTime: chunk.startTime, text: text) != nil {
                     let snapshot = self.assembler.chunks
